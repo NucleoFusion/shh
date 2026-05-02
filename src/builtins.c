@@ -1,5 +1,6 @@
 #include "builtins.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 char *builtin_str[3] = {"cd", "help", "exit"};
@@ -20,7 +21,13 @@ int shh_help(char **args) {
 
 int shh_cd(char **args) {
   if (args[1] == NULL) {
-    fprintf(stderr, "shh: expected argument to \"cd\" \n");
+    char *home = getenv("HOME");
+    if (home == NULL) {
+      fprintf(stderr, "shh: HOME not set, expected argument to \"cd\" \n");
+    }
+    if (chdir(home) != 0) {
+      perror("shh");
+    }
   } else {
     if (chdir(args[1]) != 0) {
       perror("shh");

@@ -1,4 +1,5 @@
-#include "shell.h"
+#define _POSIX_C_SOURCE 200809
+#include "../include/shh_shell.h"
 #include "builtins.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,7 +9,9 @@
 
 #define SHH_RL_BUFSIZE 1024
 #define SHH_TOK_BUFSIZE 64
+#define SHH_MAX_PIPES 64
 #define SHH_TOK_DELIMITER " \t\r\n\a"
+#define SHH_PIPE_DELIMITER "|"
 
 char *shh_readline() {
   int bufsize = SHH_RL_BUFSIZE;
@@ -46,7 +49,7 @@ char *shh_readline() {
 char **shh_splitline(char *line) {
   int bufsize = SHH_TOK_BUFSIZE;
   int position = 0;
-  char **tokens = malloc(sizeof(char) * bufsize);
+  char **tokens = malloc(sizeof(char *) * bufsize);
   char *token;
 
   if (!tokens) {
@@ -61,7 +64,7 @@ char **shh_splitline(char *line) {
 
     if (position >= bufsize) {
       bufsize += SHH_TOK_BUFSIZE;
-      tokens = realloc(tokens, bufsize);
+      tokens = realloc(tokens, sizeof(char *) * bufsize);
       if (!tokens) {
         fprintf(stderr, "shh: memory allocation error\n");
         exit(EXIT_FAILURE);
@@ -73,6 +76,32 @@ char **shh_splitline(char *line) {
 
   tokens[position] = NULL;
   return tokens;
+}
+
+Pipeline *shh_parse_pipline(char *line) {
+  Pipeline *pipe = malloc(sizeof(Pipeline));
+  pipe->commands = malloc(sizeof(Command) * SHH_MAX_PIPES);
+  pipe->count = 0;
+
+  char *saveptr;
+  char *cmd = strtok_r(line, SHH_PIPE_DELIMITER, &saveptr);
+  while (cmd != NULL) {
+    char **args = shh_splitline(cmd);
+    pipe->commands[pipe->count].args = args;
+    pipe->count++;
+
+    cmd = strtok_r(NULL, SHH_PIPE_DELIMITER, &saveptr);
+  }
+
+  return pipe;
+}
+
+int shh_exec_child(char **args) {
+  if (execvp(args[0], args) == -1) {
+    perror("shh");
+  }
+
+  exit(EXIT_FAILURE);
 }
 
 int shh_run(char **args) {
@@ -111,15 +140,66 @@ int shh_execute(char **args) {
   return shh_run(args);
 }
 
+int shh_execute_pipeline(Pipeline *p) {
+  int pipes[p->count - 1][2];
+  for (int i = 0; i < p->count - 1; i++) {
+    pipe(pipes[i]);
+  }
+
+  for (int i = 0; i < p->count; i++) {
+    pid_t pid = fork();
+    if (pid == 0) {
+      if (i > 0) { // If not first pipe
+        dup2(pipes[i - 1][0], STDIN_FILENO);
+      }
+
+      if (i < p->count - 1) {
+        dup2(pipes[i][1], STDOUT_FILENO);
+      }
+
+      for (int j = 0; j < p->count - 1; j++) {
+        close(pipes[j][0]);
+        close(pipes[j][1]);
+      }
+
+      if (execvp(p->commands[i].args[0], p->commands[i].args) == -1) {
+        perror("shh");
+      }
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  for (int i = 0; i < p->count - 1; i++) {
+    close(pipes[i][0]);
+    close(pipes[i][1]);
+  }
+  for (int i = 0; i < p->count; i++) {
+    wait(NULL);
+  }
+}
+
+void print_pipeline(Pipeline *p) {
+  printf("Pipeline (%d commands):\n", p->count);
+  for (int i = 0; i < p->count; i++) {
+    printf("  [%d]: ", i);
+    char **args = p->commands[i].args;
+    for (int j = 0; args[j] != NULL; j++) {
+      printf("'%s' ", args[j]);
+    }
+    printf("\n");
+  }
+}
+
 void shh_loop() {
   char *line;
-  char **args;
+  Pipeline *pipe;
   int status;
 
   do {
     printf("# ");
     line = shh_readline();
-    args = shh_splitline(line);
-    status = shh_execute(args);
+    pipe = shh_parse_pipline(line);
+    // print_pipeline(pipe);
+    status = shh_execute_pipeline(pipe);
   } while (status);
 }
