@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809
 #include "../include/shh_shell.h"
 #include "builtins.h"
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,7 +88,37 @@ Pipeline *shh_parse_pipline(char *line) {
   char *cmd = strtok_r(line, SHH_PIPE_DELIMITER, &saveptr);
   while (cmd != NULL) {
     char **args = shh_splitline(cmd);
+
+    // Init
+    pipe->commands[pipe->count].redirect_in = NULL;
+    pipe->commands[pipe->count].redirect_out = NULL;
+    pipe->commands[pipe->count].redirect_err = NULL;
+    pipe->commands[pipe->count].append = 0;
     pipe->commands[pipe->count].args = args;
+    pipe->commands[pipe->count].append = 0;
+
+    for (int i = 0; args[i] != NULL; i++) {
+      if (strcmp(">", args[i]) == 0) {
+        pipe->commands[pipe->count].redirect_out = args[i + 1];
+        args[i] = NULL;
+        break;
+      } else if (strcmp(">>", args[i]) == 0) {
+        pipe->commands[pipe->count].redirect_out = args[i + 1];
+        pipe->commands[pipe->count].append = 1;
+        args[i] = NULL;
+        break;
+      } else if (strcmp("2>", args[i]) == 0) {
+        pipe->commands[pipe->count].redirect_err = args[i + 1];
+        pipe->commands[pipe->count].append = 1;
+        args[i] = NULL;
+        break;
+      } else if (strcmp("<", args[i]) == 0) {
+        pipe->commands[pipe->count].redirect_in = args[i + 1];
+        pipe->commands[pipe->count].append = 1;
+        args[i] = NULL;
+        break;
+      }
+    }
     pipe->count++;
 
     cmd = strtok_r(NULL, SHH_PIPE_DELIMITER, &saveptr);
@@ -160,6 +191,27 @@ int shh_execute_pipeline(Pipeline *p) {
       for (int j = 0; j < p->count - 1; j++) {
         close(pipes[j][0]);
         close(pipes[j][1]);
+      }
+
+      // Handling Redirects
+      if (p->commands[i].redirect_out != NULL) {
+        int flags =
+            O_WRONLY | O_CREAT | (p->commands[i].append ? O_APPEND : O_TRUNC);
+        int fd = open(p->commands[i].redirect_out, flags, 0644);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+      }
+      if (p->commands[i].redirect_err != NULL) {
+        int flags = O_WRONLY | O_CREAT | O_TRUNC;
+        int fd = open(p->commands[i].redirect_err, flags, 0644);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+      }
+      if (p->commands[i].redirect_in != NULL) {
+        int flags = O_RDONLY;
+        int fd = open(p->commands[i].redirect_in, flags, 0644);
+        dup2(fd, STDIN_FILENO);
+        close(fd);
       }
 
       if (execvp(p->commands[i].args[0], p->commands[i].args) == -1) {

@@ -3,6 +3,10 @@
 
 typedef struct {
   char **args;
+  char *redirect_in;
+  char *redirect_out;
+  char *redirect_err;
+  int append;
 } Command;
 
 typedef struct {
