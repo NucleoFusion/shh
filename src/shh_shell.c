@@ -2,6 +2,7 @@
 #include "../include/shh_shell.h"
 #include "builtins.h"
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -127,50 +128,6 @@ Pipeline *shh_parse_pipline(char *line) {
   return pipe;
 }
 
-int shh_exec_child(char **args) {
-  if (execvp(args[0], args) == -1) {
-    perror("shh");
-  }
-
-  exit(EXIT_FAILURE);
-}
-
-int shh_run(char **args) {
-  pid_t pid, wpid;
-  int status;
-
-  pid = fork();
-  if (pid == 0) {
-    if (execvp(args[0], args) == -1) {
-      perror("shh");
-    }
-
-    exit(EXIT_FAILURE);
-  } else if (pid < 0) { // ERROR forking
-    perror("shh");
-  } else {
-    do {
-      wpid = waitpid(pid, &status, WUNTRACED);
-    } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-  }
-
-  return 1;
-}
-
-int shh_execute(char **args) {
-  if (args[0] == NULL) {
-    return 1;
-  }
-
-  for (int i = 0; i < shh_num_builtins(); i++) {
-    if (strcmp(args[0], builtin_str[i]) == 0) {
-      return (*builtin_func[i])(args);
-    }
-  }
-
-  return shh_run(args);
-}
-
 int shh_execute_pipeline(Pipeline *p) {
   int pipes[p->count - 1][2];
   for (int i = 0; i < p->count - 1; i++) {
@@ -178,8 +135,19 @@ int shh_execute_pipeline(Pipeline *p) {
   }
 
   for (int i = 0; i < p->count; i++) {
+    for (int j = 0; j < shh_num_builtins(); j++) {
+      if (strcmp(p->commands[i].args[0], builtin_str[j]) == 0) { // ← i, not j
+        return (*builtin_func[j])(p->commands[i].args);
+      }
+    }
+
     pid_t pid = fork();
     if (pid == 0) {
+      if (p->commands[i].args == NULL || p->commands[i].args[0] == NULL) {
+        fprintf(stderr, "shh: empty command in pipeline\n");
+        exit(EXIT_FAILURE);
+      }
+
       if (i > 0) { // If not first pipe
         dup2(pipes[i - 1][0], STDIN_FILENO);
       }
@@ -214,11 +182,14 @@ int shh_execute_pipeline(Pipeline *p) {
         close(fd);
       }
 
+      signal(SIGINT, SIG_DFL);
       if (execvp(p->commands[i].args[0], p->commands[i].args) == -1) {
         perror("shh");
       }
       exit(EXIT_FAILURE);
     }
+
+    return 1;
   }
 
   for (int i = 0; i < p->count - 1; i++) {
@@ -251,7 +222,13 @@ void shh_loop() {
     printf("# ");
     line = shh_readline();
     pipe = shh_parse_pipline(line);
-    // print_pipeline(pipe);
+    if (pipe->count == 0 || pipe->commands[0].args[0] == NULL) {
+      free(line);
+      free(pipe->commands);
+      free(pipe);
+      continue;
+    }
+    print_pipeline(pipe);
     status = shh_execute_pipeline(pipe);
   } while (status);
 }

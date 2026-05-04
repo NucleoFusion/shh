@@ -1,6 +1,7 @@
 #include "builtins.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 char *builtin_str[3] = {"cd", "help", "exit"};
@@ -29,6 +30,16 @@ int shh_cd(char **args) {
       perror("shh");
     }
   } else {
+    if (args[1][0] == '~') {
+      char *home = getenv("HOME");
+      if (home == NULL) {
+        fprintf(stderr, "shh: HOME not set, expected argument to \"cd\" \n");
+      }
+      char *result = malloc(strlen(home) + strlen(args[1]));
+      sprintf(result, "%s%s", home, args[1] + 1);
+      args[1] = result;
+    }
+
     if (chdir(args[1]) != 0) {
       perror("shh");
     }
